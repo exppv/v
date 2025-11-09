@@ -1,14 +1,551 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="utf-8">
-    <title>WIP</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EXPPV</title>
+    <!-- We're using Tailwind CSS for that minimal GUI fr -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Phosphor Icons for the nav bar -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
     <style>
-        body { background: #111; color: #999; font-family: monospace; display: grid; place-items: center; min-height: 90vh; }
+        /* Custom dark mode for the player */
+        html, body {
+            height: 100%;
+        }
+        body {
+            font-family: 'Inter', sans-serif;
+            -webkit-tap-highlight-color: transparent; /* Disable blue tap highlight on mobile */
+        }
+        .nav-btn.active i {
+            color: #3b82f6; /* Blue-500 */
+        }
+        .nav-btn.active span {
+            color: #3b82f6;
+        }
+        
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #1f2937; /* gray-800 */
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #4b5563; /* gray-600 */
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #6b7280; /* gray-500 */
+        }
+
+        /* Simple loading spinner */
+        .loader {
+            border: 4px solid #374151; /* gray-700 */
+            border-top: 4px solid #3b82f6; /* blue-500 */
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
     </style>
 </head>
-<body>
-    <p>live</p>
+<body class="bg-gray-900 text-gray-200 flex flex-col h-screen">
+
+    <!-- Header -->
+    <header class="bg-gray-800 shadow-lg p-4 flex-shrink-0">
+        <h1 id="header-title" class="text-xl font-bold text-center text-white">Folders</h1>
+    </header>
+
+    <!-- Main Content Area -->
+    <!-- This div will contain all our "screens" -->
+    <main class="flex-grow overflow-y-auto p-4">
+        
+        <!-- Screen: Home (Folder List) -->
+        <div id="home-screen" class="space-y-3">
+            <!-- Folders will be dynamically inserted here by JS -->
+        </div>
+
+        <!-- Screen: Video List -->
+        <div id="video-list-screen" class="hidden space-y-4">
+            <!-- Back button -->
+            <button id="back-to-home" class="text-blue-400 hover:text-blue-300 mb-2">&larr; Back to Folders</button>
+            <div id="video-list-container" class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <!-- Videos will be dynamically inserted here -->
+            </div>
+        </div>
+
+        <!-- Screen: Search -->
+        <div id="search-screen" class="hidden">
+            <div class="relative mb-4">
+                <input type="search" id="search-input" placeholder="Search all videos..." class="w-full bg-gray-700 text-white p-3 rounded-lg pl-10 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <i class="ph ph-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"></i>
+            </div>
+            <div id="search-results-container" class="space-y-4">
+                <!-- Search results will be dynamically inserted here -->
+            </div>
+        </div>
+
+        <!-- Screen: Bookmarks -->
+        <div id="bookmarks-screen" class="hidden space-y-4">
+            <!-- Bookmarked videos will be dynamically inserted here -->
+            <div id="bookmarks-list-container"></div>
+        </div>
+
+        <!-- Loading Spinner (shared) -->
+        <div id="loading-spinner" class="hidden flex justify-center items-center py-10">
+            <div class="loader"></div>
+        </div>
+
+        <!-- Error Message (shared) -->
+        <div id="error-message" class="hidden p-4 bg-red-800 text-red-100 rounded-lg">
+            <!-- Error text will be set by JS -->
+        </div>
+
+    </main>
+
+    <!-- Bottom Navigation Bar -->
+    <nav class="flex-shrink-0 bg-gray-800 shadow-inner flex justify-around p-3 sticky bottom-0">
+        <button data-view="home" class="nav-btn active flex flex-col items-center text-gray-400">
+            <i class="ph-fill ph-folder text-2xl"></i>
+            <span class="text-xs font-medium">Folders</span>
+        </button>
+        <button data-view="search" class="nav-btn flex flex-col items-center text-gray-400">
+            <i class="ph-fill ph-magnifying-glass text-2xl"></i>
+            <span class="text-xs font-medium">Search</span>
+        </button>
+        <button data-view="bookmarks" class="nav-btn flex flex-col items-center text-gray-400">
+            <i class="ph-fill ph-bookmark-simple text-2xl"></i>
+            <span class="text-xs font-medium">Bookmarks</span>
+        </button>
+    </nav>
+
+
+    <script>
+        // --- CONFIGURATION ---
+        // ---------------------
+        // 1. PASTE YOUR GOOGLE DRIVE API KEY HERE
+        const API_KEY = "AIzaSyDjaXzHF1HbI-msdpyWCS0SkE30zhvsWrs"; 
+
+        // 2. ADD YOUR FOLDERS HERE
+        // To get a Folder ID, open the folder in Google Drive. 
+        // The link will be: https://drive.google.com/drive/folders/THIS_IS_THE_ID
+        const FOLDERS = [
+            { name: "Hard 1", id: "139BkF9kFHlWDkyWfwT6_67i-hyWQn724" },
+            { name: "Hard 2", id: "REPLACE_WITH_YOUR_FOLDER_ID_2" },
+            // Add as many as you want...
+        ];
+        // ---------------------
+        // --- END CONFIGURATION ---
+
+
+        // --- GLOBAL STATE & DOM ELEMENTS ---
+        const API_URL = "https://www.googleapis.com/drive/v3/files";
+        let bookmarks = [];
+        let lazyLoadObserver; // For lazy loading iframes
+
+        const screens = {
+            home: document.getElementById('home-screen'),
+            videos: document.getElementById('video-list-screen'),
+            search: document.getElementById('search-screen'),
+            bookmarks: document.getElementById('bookmarks-screen')
+        };
+        const navButtons = document.querySelectorAll('.nav-btn');
+        const headerTitle = document.getElementById('header-title');
+        const loadingSpinner = document.getElementById('loading-spinner');
+        const errorMessage = document.getElementById('error-message');
+
+        // Home Screen
+        const homeScreenContainer = document.getElementById('home-screen');
+
+        // Video List Screen
+        const videoListContainer = document.getElementById('video-list-container');
+        const backToHomeBtn = document.getElementById('back-to-home');
+
+        // Search Screen
+        const searchInput = document.getElementById('search-input');
+        const searchResultsContainer = document.getElementById('search-results-container');
+
+        // Bookmarks Screen
+        const bookmarksListContainer = document.getElementById('bookmarks-list-container');
+        
+
+        // --- CORE FUNCTIONS ---
+
+        /**
+         * Hides all screens and shows the one with the given viewId
+         */
+        function showView(viewId) {
+            // Hide all screens
+            Object.values(screens).forEach(screen => screen.classList.add('hidden'));
+            
+            // Show the target screen
+            if (screens[viewId]) {
+                screens[viewId].classList.remove('hidden');
+            }
+
+            // Update header title
+            const viewTitles = {
+                home: 'Folders',
+                videos: 'Videos',
+                search: 'Search',
+                bookmarks: 'Bookmarks'
+            };
+            headerTitle.textContent = viewTitles[viewId] || 'G-Drive Player';
+
+            // Update nav button active state
+            navButtons.forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.view === viewId);
+            });
+
+            // Specific logic for bookmark view
+            if (viewId === 'bookmarks') {
+                renderBookmarks();
+            }
+        }
+
+        /**
+         * Shows/hides the loading spinner
+         */
+        function showLoading(isLoading) {
+            loadingSpinner.classList.toggle('hidden', !isLoading);
+            if (isLoading) {
+                hideError(); // Hide error when starting to load
+            }
+        }
+
+        /**
+         * Shows an error message
+         */
+        function showError(message) {
+            errorMessage.textContent = message;
+            errorMessage.classList.remove('hidden');
+        }
+
+        /**
+         * Hides the error message
+         */
+        function hideError() {
+            errorMessage.classList.add('hidden');
+        }
+
+        /**
+         * Initializes the IntersectionObserver for lazy loading iframes
+         */
+        function initLazyLoader() {
+            const options = {
+                root: null, // observes intersections relative to the viewport
+                rootMargin: '200px', // Start loading when 200px *before* it enters the screen
+                threshold: 0.01 // As soon as 1% is visible
+            };
+
+            lazyLoadObserver = new IntersectionObserver((entries, observer) => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting) {
+                        const placeholder = entry.target;
+                        const embedSrc = placeholder.dataset.embedSrc;
+                        
+                        // Create the iframe
+                        const iframe = document.createElement('iframe');
+                        iframe.src = embedSrc;
+                        iframe.className = "w-full h-full border-0";
+                        iframe.allowfullscreen = true;
+                        
+                        // Replace the placeholder div with the new iframe
+                        // We replace the parent (placeholder.parentNode) which is the .aspect-video div's content
+                        placeholder.parentNode.replaceChild(iframe, placeholder);
+                        
+                        // Stop observing this element
+                        observer.unobserve(placeholder);
+                    }
+                });
+            }, options);
+        }
+
+        /**
+         * Fetches files from the Google Drive API
+         * @param {string} folderId - The ID of the Google Drive folder.
+         * @param {string} [searchQuery] - Optional search term for video names.
+         * @returns {Promise<Array>} - A promise that resolves to an array of file objects.
+         */
+        async function fetchVideos(folderId, searchQuery = "") {
+            let query = `'${folderId}' in parents and mimeType contains 'video/' and trashed = false`;
+            if (searchQuery) {
+                query += ` and name contains '${searchQuery}'`;
+            }
+            
+            const url = `${API_URL}?key=${API_KEY}&q=${encodeURIComponent(query)}&fields=files(id, name, webViewLink)`;
+
+            try {
+                const response = await fetch(url);
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error.message || `HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                const files = data.files || [];
+
+                // NEW: Sort files alphanumerically (natural sort)
+                files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+
+                return files;
+            } catch (error) {
+                console.error("Error fetching videos:", error);
+                showError(`Failed to load videos. Check API Key and Folder permissions. (Error: ${error.message})`);
+                return []; // Return empty array on failure
+            }
+        }
+        
+        /**
+         * Creates the HTML for a single video card
+         * @param {object} video - The video object { id, name, webViewLink }
+         * @returns {string} - The HTML string for the video card.
+         */
+        function createVideoCardHTML(video) {
+            // Use the webViewLink for the iframe. It's more reliable than /preview.
+            // We just need to change 'view' to 'preview'
+            const embedLink = video.webViewLink.replace("/view", "/preview");
+            const isBookmarked = bookmarks.some(b => b.id === video.id);
+            const bookmarkIconClass = isBookmarked ? 'ph-fill text-blue-500' : 'ph';
+
+            return `
+                <div class="bg-gray-800 rounded-lg shadow-lg overflow-hidden">
+                    <div class="aspect-video bg-gray-700">
+                        <!-- LAZY LOAD PLACEHOLDER -->
+                        <div class="lazy-load w-full h-full flex items-center justify-center cursor-pointer" data-embed-src="${embedLink}">
+                            <i class="ph ph-play-circle text-6xl text-gray-500"></i>
+                        </div>
+                    </div>
+                    <div class="p-3 flex justify-between items-center">
+                        <span class="text-sm font-medium text-gray-200 truncate pr-2" title="${video.name}">
+                            ${video.name}
+                        </span>
+                        <button class="bookmark-btn flex-shrink-0 p-1" data-video-id="${video.id}" data-video-name="${video.name}" data-video-link="${video.webViewLink}">
+                            <i class="ph-bookmark-simple ${bookmarkIconClass} text-2xl transition-all hover:text-blue-400"></i>
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+        
+        /**
+         * Renders a list of videos into a target container
+         * @param {Array} videos - An array of video objects.
+         * @param {HTMLElement} container - The container element to render into.
+         * @param {string} emptyMessage - Message to show if no videos are found.
+         */
+        function renderVideoList(videos, container, emptyMessage = "No videos found.") {
+            container.innerHTML = ''; // Clear previous content
+            if (videos.length === 0) {
+                container.innerHTML = `<p class="text-gray-400 text-center col-span-full">${emptyMessage}</p>`;
+                return;
+            }
+            
+            videos.forEach(video => {
+                container.innerHTML += createVideoCardHTML(video);
+            });
+
+            // NEW: After adding all HTML, find placeholders and observe
+            if (lazyLoadObserver) { // Ensure observer is initialized
+                const placeholders = container.querySelectorAll('.lazy-load');
+                placeholders.forEach(ph => lazyLoadObserver.observe(ph));
+            }
+        }
+
+
+        // --- RENDERING & EVENT HANDLERS ---
+
+        /**
+         * Renders the home screen with the list of folders
+         */
+        function renderHomeScreen() {
+            homeScreenContainer.innerHTML = ''; // Clear existing
+            if (FOLDERS.length === 0) {
+                homeScreenContainer.innerHTML = `<p class="text-gray-400 text-center">No folders configured. Please edit the script.</p>`;
+                return;
+            }
+
+            FOLDERS.forEach(folder => {
+                const folderEl = document.createElement('button');
+                folderEl.className = "w-full bg-gray-700 hover:bg-gray-600 text-white p-5 rounded-lg text-left shadow-md transition-all flex justify-between items-center";
+                folderEl.innerHTML = `
+                    <span class="text-lg font-semibold">${folder.name}</span>
+                    <i class="ph ph-caret-right text-xl text-gray-400"></i>
+                `;
+                folderEl.onclick = () => {
+                    loadFolderVideos(folder.id, folder.name);
+                };
+                homeScreenContainer.appendChild(folderEl);
+            });
+        }
+        
+        /**
+         * Loads and displays videos for a specific folder
+         * @param {string} folderId - The folder ID to load.
+         * @param {string} folderName - The name of the folder (for the header).
+         */
+        async function loadFolderVideos(folderId, folderName) {
+            showView('videos');
+            headerTitle.textContent = folderName; // Set header to folder name
+            videoListContainer.innerHTML = ''; // Clear old videos
+            showLoading(true);
+
+            const videos = await fetchVideos(folderId);
+            
+            showLoading(false);
+            renderVideoList(videos, videoListContainer, "No videos found in this folder.");
+        }
+
+        /**
+         * Renders the list of bookmarked videos
+         */
+        function renderBookmarks() {
+            if (bookmarks.length === 0) {
+                bookmarksListContainer.innerHTML = `<p class="text-gray-400 text-center">You have no bookmarks. Tap the <i class="ph ph-bookmark-simple inline-block"></i> icon on a video to save it.</p>`;
+                return;
+            }
+            // Bookmarks are already video objects, so we just render them
+            renderVideoList(bookmarks, bookmarksListContainer, "No bookmarks found.");
+        }
+
+        /**
+         * Handles the search input event
+         */
+        async function handleSearch() {
+            const query = searchInput.value.trim();
+            if (query.length < 2) {
+                searchResultsContainer.innerHTML = '<p class="text-gray-400 text-center">Type at least 2 characters to search.</p>';
+                return;
+            }
+
+            searchResultsContainer.innerHTML = ''; // Clear old results
+            showLoading(true);
+
+            // Create a list of fetch promises for all folders
+            const searchPromises = FOLDERS.map(folder => fetchVideos(folder.id, query));
+            
+            try {
+                const resultsPerFolder = await Promise.all(searchPromises);
+                // Flatten the array of arrays into a single array of videos
+                const allVideos = resultsPerFolder.flat();
+                
+                showLoading(false);
+                renderVideoList(allVideos, searchResultsContainer, "No videos found matching your search.");
+                
+            } catch (error) {
+                showLoading(false);
+                showError("An error occurred during search.");
+                console.error("Search error:", error);
+            }
+        }
+
+        // --- BOOKMARK FUNCTIONS ---
+
+        /**
+         * Loads bookmarks from localStorage
+         */
+        function loadBookmarks() {
+            bookmarks = JSON.parse(localStorage.getItem('gdrive_bookmarks')) || [];
+        }
+
+        /**
+         * Saves bookmarks to localStorage
+         */
+        function saveBookmarks() {
+            localStorage.setItem('gdrive_bookmarks', JSON.stringify(bookmarks));
+        }
+
+        /**
+         * Adds or removes a video from bookmarks
+         * @param {HTMLElement} button - The bookmark button that was clicked.
+         */
+        function toggleBookmark(button) {
+            const video = {
+                id: button.dataset.videoId,
+                name: button.dataset.videoName,
+                webViewLink: button.dataset.videoLink
+            };
+            
+            const bookmarkIndex = bookmarks.findIndex(b => b.id === video.id);
+            const icon = button.querySelector('i');
+
+            if (bookmarkIndex > -1) {
+                // Already bookmarked, so remove it
+                bookmarks.splice(bookmarkIndex, 1);
+                icon.classList.remove('ph-fill', 'text-blue-500');
+                icon.classList.add('ph');
+            } else {
+                // Not bookmarked, so add it
+                bookmarks.push(video);
+                icon.classList.add('ph-fill', 'text-blue-500');
+                icon.classList.remove('ph');
+            }
+            
+            saveBookmarks();
+
+            // If we are in the bookmarks view, re-render it
+            if (!screens.bookmarks.classList.contains('hidden')) {
+                renderBookmarks();
+            }
+        }
+
+
+        // --- EVENT LISTENERS ---
+
+        // Navigation
+        navButtons.forEach(button => {
+            button.addEventListener('click', () => {
+                showView(button.dataset.view);
+            });
+        });
+
+        // Back button
+        backToHomeBtn.addEventListener('click', () => {
+            showView('home');
+        });
+
+        // Search
+        // 'search' event fires when user clears (clicks 'x') or hits Enter
+        searchInput.addEventListener('search', handleSearch);
+        // We can also add a slight delay on typing
+        let searchTimeout;
+        searchInput.addEventListener('keyup', (e) => {
+            if (e.key === 'Enter') {
+                clearTimeout(searchTimeout);
+                handleSearch();
+            }
+            // You could add a search-as-you-type here if you want
+            // clearTimeout(searchTimeout);
+            // searchTimeout = setTimeout(handleSearch, 500);
+        });
+
+
+        // Global click listener for bookmark buttons (Event Delegation)
+        document.addEventListener('click', function(e) {
+            const bookmarkBtn = e.target.closest('.bookmark-btn');
+            if (bookmarkBtn) {
+                toggleBookmark(bookmarkBtn);
+            }
+        });
+
+
+        // --- INITIALIZATION ---
+        
+        window.addEventListener('load', () => {
+            if (API_KEY === "YOUR_API_KEY_HERE") {
+                showError("API Key is missing. Please edit index.html and add your Google Drive API Key.");
+                return;
+            }
+            initLazyLoader(); // NEW: Initialize the lazy loader
+            loadBookmarks();
+            renderHomeScreen();
+            showView('home'); // Show home screen by default
+        });
+
+    </script>
 </body>
 </html>
